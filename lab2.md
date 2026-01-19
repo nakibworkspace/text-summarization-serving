@@ -976,7 +976,7 @@ sudo usermod -aG docker ubuntu
 * 22 (SSH)
 * 8000 (FastAPI app)
 
-Push to GitHub — workflow runs automatically.
+**Push to GitHub** — workflow runs automatically.
 
 
 ## Troubleshooting
