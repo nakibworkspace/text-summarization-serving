@@ -209,3 +209,4 @@ jobs:
           echo "- **API**: http://${{ secrets.EC2_HOST }}:8000" >> $GITHUB_STEP_SUMMARY
           echo "- **Docs**: http://${{ secrets.EC2_HOST }}:8000/docs" >> $GITHUB_STEP_SUMMARY
           echo "- **Health**: http://${{ secrets.EC2_HOST }}:8000/ping" >> $GITHUB_STEP_SUMMARY
+#
