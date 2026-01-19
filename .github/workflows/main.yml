@@ -1,0 +1,212 @@
+name: Continuous Integration and Delivery
+
+on: [push]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}/summarizer
+
+jobs:
+
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ref: main
+      - name: Log in to GitHub Packages
+        run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull images
+        run: |
+          docker pull ${{ env.IMAGE }}-builder:latest || true
+          docker pull ${{ env.IMAGE }}-final:latest || true
+      - name: Build images
+        run: |
+          docker build \
+            --target builder \
+            --cache-from ${{ env.IMAGE }}-builder:latest \
+            --tag ${{ env.IMAGE }}-builder:latest \
+            --file ./project/Dockerfile.prod \
+            "./project"
+          docker build \
+            --cache-from ${{ env.IMAGE }}-final:latest \
+            --tag ${{ env.IMAGE }}-final:latest \
+            --tag ${{ env.IMAGE }}-final:${{ github.sha }} \
+            --file ./project/Dockerfile.prod \
+            "./project"
+      - name: Push images
+        run: |
+          docker push ${{ env.IMAGE }}-builder:latest
+          docker push ${{ env.IMAGE }}-final:${{ github.sha }}
+          docker push ${{ env.IMAGE }}-final:latest
+
+  test:
+    name: Test Docker Image
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ref: main
+      - name: Log in to GitHub Packages
+        run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull images
+        run: |
+          docker pull ${{ env.IMAGE }}-final:latest
+      - name: Run container
+        run: |
+          docker run \
+            -d \
+            --name fastapi-tdd \
+            -e PORT=8765 \
+            -e ENVIRONMENT=dev \
+            -e DATABASE_URL=sqlite://sqlite.db \
+            -e DATABASE_TEST_URL=sqlite://sqlite.db \
+            -p 5003:8765 \
+            ${{ env.IMAGE }}-final:latest
+      - name: Pytest
+        run: docker exec fastapi-tdd python -m pytest .
+      - name: Flake8
+        run: docker exec fastapi-tdd python -m flake8 .
+      - name: Black
+        run: docker exec fastapi-tdd python -m black . --check
+      - name: isort
+        run: docker exec fastapi-tdd python -m isort . --check-only
+
+  deploy:
+    name: Deploy to AWS EC2
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    env:
+      EC2_USER: ubuntu
+      APP_DIR: /home/ubuntu/fastapi-app
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ref: main
+      
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+      
+      - name: Log in to GitHub Packages
+        run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Pull latest image
+        run: |
+          docker pull ${{ env.IMAGE }}-final:latest
+      
+      - name: Save and transfer Docker image
+        run: |
+          # Save image to tar
+          docker save ${{ env.IMAGE }}-final:latest | gzip > fastapi-image.tar.gz
+          
+          # Transfer to EC2
+          scp -i ~/.ssh/id_rsa fastapi-image.tar.gz ${{ env.EC2_USER }}@${{ secrets.EC2_HOST }}:~/
+      
+      - name: Deploy on EC2
+        run: |
+          ssh -i ~/.ssh/id_rsa ${{ env.EC2_USER }}@${{ secrets.EC2_HOST }} << 'ENDSSH'
+            # Create app directory if it doesn't exist
+            mkdir -p ${{ env.APP_DIR }}
+            cd ${{ env.APP_DIR }}
+            
+            # Load the new Docker image
+            docker load < ~/fastapi-image.tar.gz
+            rm ~/fastapi-image.tar.gz
+            
+            # Create docker-compose.yml
+            cat > docker-compose.yml << 'EOF'
+          services:
+            web:
+              image: ${{ env.IMAGE }}-final:latest
+              command: gunicorn --bind 0.0.0.0:8000 app.main:app -k uvicorn.workers.UvicornWorker --workers 2
+              ports:
+                - "8000:8000"
+              environment:
+                - ENVIRONMENT=prod
+                - TESTING=0
+                - DATABASE_URL=postgres://postgres:${{ secrets.DB_PASSWORD }}@db:5432/fastapi_db
+                - PORT=8000
+              depends_on:
+                - db
+              restart: unless-stopped
+
+            db:
+              image: postgres:17
+              volumes:
+                - postgres_data:/var/lib/postgresql/data
+              environment:
+                - POSTGRES_USER=postgres
+                - POSTGRES_PASSWORD=${{ secrets.DB_PASSWORD }}
+                - POSTGRES_DB=fastapi_db
+              restart: unless-stopped
+
+          volumes:
+            postgres_data:
+          EOF
+            
+            # Stop old containers
+            docker-compose down || true
+            
+            # Start new containers
+            docker-compose up -d
+            
+            # Wait for services to be ready
+            sleep 10
+            
+            # Run migrations
+            docker-compose exec -T web aerich init -t app.db.TORTOISE_ORM 2>/dev/null || true
+            docker-compose exec -T web aerich init-db 2>/dev/null || true
+            docker-compose exec -T web aerich upgrade || true
+            
+            # Clean up old images
+            docker image prune -af --filter "until=24h" || true
+            
+            echo "Deployment completed successfully!"
+          ENDSSH
+      
+      - name: Verify deployment
+        run: |
+          sleep 5
+          response=$(curl -s http://${{ secrets.EC2_HOST }}:8000/ping || echo "failed")
+          echo "Health check response: $response"
+          
+          if echo "$response" | grep -q "pong"; then
+            echo "Deployment successful!"
+            echo "Application is live at: http://${{ secrets.EC2_HOST }}:8000"
+          else
+            echo "Deployment verification failed"
+            exit 1
+          fi
+      
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "## Deployment Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Application deployed successfully to EC2" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Access URLs:" >> $GITHUB_STEP_SUMMARY
+          echo "- **API**: http://${{ secrets.EC2_HOST }}:8000" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docs**: http://${{ secrets.EC2_HOST }}:8000/docs" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health**: http://${{ secrets.EC2_HOST }}:8000/ping" >> $GITHUB_STEP_SUMMARY
