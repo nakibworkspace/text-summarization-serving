@@ -76,8 +76,37 @@ text-summarization-serving
 | `requirements-dev.txt` | Development tools (linting, testing) |
 
 ---
+## Step 1: Environment Setup
+### 1.1 Updating the Envrionment
+```bash
+sudo apt update && sudo apt upgrade
 
-## Text Summarization Logic
+### 1.2 Clone the repository
+```bash
+git clone -b lab2 https://github.com/nakibworkspace/text-summarization-serving.git
+```
+
+### 1.3 Build the Image and Run
+```bash
+# Build and start the containers
+docker compose up -d --build
+
+# View logs
+docker compose logs -f
+
+# Apply database migrations
+docker compose exec web aerich upgrade
+
+# Create tables if the migration fails
+docker compose exec web python app/db.py
+
+# Verify tables exist
+docker compose exec web-db psql -U postgres -c "\c web_dev" -c "\dt"
+```
+**Output:**
+
+
+## Step 2: Text Summarization Logic
 
 The core functionality of the application is extracting and summarizing content from URLs using Natural Language Processing.
 
@@ -131,9 +160,9 @@ This function runs as a **background task**, allowing the API to respond immedia
 
 ---
 
-## API Endpoints Explanation
+## Step 3: API Endpoints Explanation
 
-### Endpoint Overview
+### 3.1 Endpoint Overview
 
 | Method | Endpoint | Description | Response Code |
 |--------|----------|-------------|---------------|
@@ -144,7 +173,7 @@ This function runs as a **background task**, allowing the API to respond immedia
 | DELETE | `/summaries/{id}/` | Delete a summary | 200 OK |
 | PUT | `/summaries/{id}/` | Update a summary | 200 OK |
 
-### Health Check Endpoint
+### 3.2 Health Check Endpoint
 
 **project/app/api/ping.py**
 ```python
@@ -162,7 +191,7 @@ async def pong(settings: Settings = Depends(get_settings)):
 - Shows current environment (dev/prod)
 - Useful for load balancer health checks
 
-### Create Summary Endpoint
+### 3.3 Create Summary Endpoint
 
 **project/app/api/summaries.py**
 ```python
@@ -182,7 +211,7 @@ async def create_summary(
 3. Schedules background task for summarization
 4. Returns immediately with ID and URL
 
-### Read Summary Endpoint
+### 3.4 Read Summary Endpoint
 
 ```python
 @router.get("/{id}/", response_model=SummarySchema)
@@ -198,7 +227,7 @@ async def read_summary(id: int = Path(..., gt=0)) -> SummarySchema:
 - Returns 404 if summary not found
 - Returns full summary object with timestamp
 
-### Update Summary Endpoint
+### 3.5 Update Summary Endpoint
 
 ```python
 @router.put("/{id}/", response_model=SummarySchema)
@@ -216,7 +245,7 @@ async def update_summary(
 - Summary text in payload
 - Existing record with given ID
 
-### Delete Summary Endpoint
+### 3.6 Delete Summary Endpoint
 
 ```python
 @router.delete("/{id}/", response_model=SummaryResponseSchema)
@@ -235,7 +264,7 @@ async def delete_summary(id: int = Path(..., gt=0)) -> SummaryResponseSchema:
 
 ---
 
-## Production Dockerfile
+## Step 4: Production Dockerfile
 
 The production Dockerfile uses multi-stage builds for smaller, more secure images.
 
@@ -349,9 +378,9 @@ CMD gunicorn --bind 0.0.0.0:$PORT app.main:app -k uvicorn.workers.UvicornWorker
 
 ---
 
-## Code Quality Tools
+## Step 5: Code Quality
 
-### Overview
+### 5.1 Overview
 
 | Tool | Purpose | Command |
 |------|---------|---------|
@@ -359,7 +388,7 @@ CMD gunicorn --bind 0.0.0.0:$PORT app.main:app -k uvicorn.workers.UvicornWorker
 | **Flake8** | Linter (style guide enforcement) | `flake8 .` |
 | **isort** | Import sorter | `isort .` |
 
-### Black - Code Formatter
+### 5.2 Black - Code Formatter
 
 Black is an opinionated code formatter that enforces a consistent style.
 
@@ -385,7 +414,7 @@ exclude = '''
 '''
 ```
 
-### Flake8 - Linter
+### 5.3 Flake8 - Linter
 
 Flake8 checks code against PEP 8 style guide and finds common errors.
 
@@ -404,7 +433,7 @@ max-line-length = 88
 exclude = migrations
 ```
 
-### isort - Import Sorter
+### 5.4 isort - Import Sorter
 
 isort automatically sorts and organizes imports.
 
@@ -426,7 +455,7 @@ profile = "black"
 skip = ["migrations"]
 ```
 
-### Running All Quality Checks
+### 5.5 Running All Quality Checks
 
 ```bash
 # Run all checks
@@ -437,7 +466,7 @@ docker-compose exec web isort . --check-only
 
 ---
 
-## GitHub Actions Workflows
+## Step 6: GitHub Actions Workflows
 
 GitHub Actions automates testing and deployment on every push.
 
@@ -535,14 +564,12 @@ jobs:
 
 ---
 
-## Testing with Pytest
+## Step 7: Testing with Pytest
 
-### Test Configuration
+### 7.1 Test Configuration
 
 **project/tests/conftest.py**
 ```python
-# project/tests/conftest.py
-
 
 import os
 
@@ -600,12 +627,10 @@ def test_app_with_db():
 
 The `dependency_overrides` feature allows injecting test configurations, pointing tests to `web_test` database.
 
-### Health Check Test
+### 7.2 Health Check Test
 
 **project/tests/test_ping.py**
 ```python
-# project/tests/test_ping.py
-
 
 def test_ping(test_app):
     response = test_app.get("/ping")
@@ -613,13 +638,10 @@ def test_ping(test_app):
     assert response.json() == {"environment": "dev", "ping": "pong", "testing": True}
 ```
 
-### Integration Tests
+### 7.3 Integration Tests
 
 **project/tests/test_summaries.py**
 ```python
-# project/tests/test_summaries.py
-
-
 import json
 
 import pytest
@@ -752,12 +774,10 @@ def test_update_summary(test_app_with_db, monkeypatch):
     assert response_dict["created_at"]
 ```
 
-### Unit Tests
+### 7.4 Unit Tests
 
 **project/tests/test_summaries_unit.py**
 ```python
-# project/tests/test_summaries_unit.py
-
 
 import json
 from datetime import datetime
@@ -855,7 +875,7 @@ def test_remove_summary(test_app, monkeypatch):
     assert response.json() == {"id": 1, "url": "https://foo.bar/"}
 ```
 
-### Coverage Configuration
+### 7.6 Coverage Configuration
 
 **project/.coveragerc**
 ```ini
@@ -885,53 +905,54 @@ docker-compose exec web python -m pytest -v
 
 ---
 
-## AWS VPC Setup
+## Step 8: Configuring AWS for Deployment
 
-### What is a VPC?
+### 8.1 Creating VPC
+
+**What is a VPC?**
 
 A Virtual Private Cloud (VPC) is an isolated virtual network within AWS where you can launch your resources. It provides complete control over your networking environment.
 
-### Creating the VPC
 
 *To be furnished*
 
 ---
 
-## Subnet Configuration
+### 8.2 Subnet Configuration
 
-### What is a Subnet?
+**What is a Subnet?**
 
 A subnet is a range of IP addresses within your VPC. Subnets allow you to partition your network and control traffic flow.
 
-### Creating the Subnet
+**Creating the Subnet**
 
 *To be furnished*
 
 ---
 
-## Internet Gateway (IGW)
+### 8.3 Internet Gateway (IGW)
 
-### What is an Internet Gateway?
+**What is an Internet Gateway?**
 
 An Internet Gateway enables communication between instances in your VPC and the internet. It provides a target for internet-routable traffic.
 
-### Creating and Attaching the IGW
+**Creating and Attaching the IGW**
 
 *To be furnished*
 
 ---
 
-## EC2 Instance Setup
+### 8.4 EC2 Instance Setup
 
-### What is EC2?
+**What is EC2?**
 
 Amazon Elastic Compute Cloud (EC2) provides scalable computing capacity in the AWS cloud. We'll use an EC2 instance to host our FastAPI application.
 
-### Launching the EC2 Instance
+**Launching the EC2 Instance**
 
 *To be furnished*
 
-### Deploying the Application
+### 8.5 Deploying the Application
 
 *To be furnished*
 
