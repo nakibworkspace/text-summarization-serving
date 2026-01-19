@@ -2,6 +2,10 @@ name: Continuous Integration and Delivery
 
 on: [push]
 
+permissions:
+  contents: read
+  packages: write
+
 env:
   IMAGE: ghcr.io/$(echo $GITHUB_REPOSITORY | tr '[A-Z]' '[a-z]')/summarizer
 
