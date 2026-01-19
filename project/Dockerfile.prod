@@ -50,10 +50,10 @@ RUN mkdir $APP_HOME
 WORKDIR $APP_HOME
 
 # set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ENV ENVIRONMENT prod
-ENV TESTING 0
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV ENVIRONMENT=prod
+ENV TESTING=0
 
 # install system dependencies
 RUN apt-get update \
@@ -66,6 +66,7 @@ COPY --from=builder /usr/src/app/requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache /wheels/*
 RUN pip install "uvicorn[standard]==0.34.1"
+RUN pip install black==25.1.0 flake8==7.2.0 isort==6.0.1 pytest==8.3.5
 
 # add app
 COPY . .
